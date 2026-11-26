@@ -2,8 +2,13 @@ import os
 import sqlite3
 from flask import Flask, render_template, request, jsonify
 
-app = Flask(__name__)
-DB_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'coccorrocci.db')
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+templates_dir = os.path.join(BASE_DIR, 'templates')
+if not os.path.exists(templates_dir):
+    templates_dir = BASE_DIR
+
+app = Flask(__name__, template_folder=templates_dir)
+DB_FILE = os.path.join(BASE_DIR, 'coccorrocci.db')
 
 def get_db():
     conn = sqlite3.connect(DB_FILE)
@@ -24,7 +29,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             reparto_id INTEGER NOT NULL,
             nome TEXT NOT NULL,
-            categoria TEXT,
+            categoria TEXT DEFAULT '',
             um TEXT DEFAULT 'Kg',
             prezzo_lordo REAL DEFAULT 0,
             perc_scarto REAL DEFAULT 0,
@@ -38,7 +43,7 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             reparto_id INTEGER NOT NULL,
             nome TEXT NOT NULL,
-            categoria TEXT,
+            categoria TEXT DEFAULT '',
             porzioni INTEGER DEFAULT 1,
             prezzo_lordo REAL DEFAULT 0,
             aliquota_iva REAL DEFAULT 10,
@@ -61,8 +66,8 @@ def init_db():
             data_ora TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             quantita REAL NOT NULL,
             prezzo_lordo REAL NOT NULL,
-            num_bolla TEXT,
-            fornitore TEXT
+            num_bolla TEXT DEFAULT '',
+            fornitore TEXT DEFAULT ''
         );
 
         CREATE TABLE IF NOT EXISTS movimenti_scarico (
@@ -93,34 +98,21 @@ def get_reparti():
 
 @app.route('/api/ingredienti', methods=['GET', 'POST'])
 def handle_ingredienti():
-    conn = get_db()
     try:
+        conn = get_db()
         if request.method == 'POST':
-            data = request.get_json(silent=True) or {}
-            reparto_id_val = data.get('reparto_id', 1)
-            try:
-                reparto_id = int(reparto_id_val)
-            except (ValueError, TypeError):
-                reparto_id = 1
-                
+            data = request.json or {}
+            reparto_id = int(data.get('reparto_id', 1))
             nome = str(data.get('nome', '')).strip()
             if not nome:
-                return jsonify({"error": "Il nome dell'ingrediente è obbligatorio"}), 400
-                
+                return jsonify({"status": "error", "message": "Nome ingrediente obbligatorio"}), 400
+            
             categoria = str(data.get('categoria', '')).strip()
-            um = str(data.get('um', 'Kg')).strip() or 'Kg'
-            
-            try: prezzo_lordo = float(data.get('prezzo_lordo', 0))
-            except (ValueError, TypeError): prezzo_lordo = 0.0
-            
-            try: perc_scarto = float(data.get('perc_scarto', 0))
-            except (ValueError, TypeError): perc_scarto = 0.0
-            
-            try: giacenza = float(data.get('giacenza', 0))
-            except (ValueError, TypeError): giacenza = 0.0
-            
-            try: stock_minimo = float(data.get('stock_minimo', 0))
-            except (ValueError, TypeError): stock_minimo = 0.0
+            um = str(data.get('um', 'Kg')).strip()
+            prezzo_lordo = float(data.get('prezzo_lordo') or 0)
+            perc_scarto = float(data.get('perc_scarto') or 0)
+            giacenza = float(data.get('giacenza') or 0)
+            stock_minimo = float(data.get('stock_minimo') or 0)
 
             costo_netto = prezzo_lordo / (1 - (perc_scarto / 100)) if (0 <= perc_scarto < 100) else prezzo_lordo
 
@@ -144,36 +136,24 @@ def handle_ingredienti():
             conn.close()
             return jsonify(items)
     except Exception as e:
-        conn.close()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/ricette', methods=['GET', 'POST'])
 def handle_ricette():
-    conn = get_db()
     try:
+        conn = get_db()
         if request.method == 'POST':
-            data = request.get_json(silent=True) or {}
-            try: reparto_id = int(data.get('reparto_id', 1))
-            except (ValueError, TypeError): reparto_id = 1
-            
+            data = request.json or {}
+            reparto_id = int(data.get('reparto_id', 1))
             nome = str(data.get('nome', '')).strip()
             if not nome:
-                return jsonify({"error": "Il nome della ricetta è obbligatorio"}), 400
-                
+                return jsonify({"status": "error", "message": "Nome piatto obbligatorio"}), 400
+            
             categoria = str(data.get('categoria', '')).strip()
-            
-            try: porzioni = int(data.get('porzioni', 1))
-            except (ValueError, TypeError): porzioni = 1
-            if porzioni < 1: porzioni = 1
-            
-            try: prezzo_lordo = float(data.get('prezzo_lordo', 0))
-            except (ValueError, TypeError): prezzo_lordo = 0.0
-            
-            try: aliquota_iva = float(data.get('aliquota_iva', 10))
-            except (ValueError, TypeError): aliquota_iva = 10.0
-            
-            try: target_fc = float(data.get('target_fc', 30))
-            except (ValueError, TypeError): target_fc = 30.0
+            porzioni = int(data.get('porzioni') or 1)
+            prezzo_lordo = float(data.get('prezzo_lordo') or 0)
+            aliquota_iva = float(data.get('aliquota_iva') or 10)
+            target_fc = float(data.get('target_fc') or 30)
 
             c = conn.cursor()
             c.execute("""
@@ -203,11 +183,11 @@ def handle_ricette():
                 """, (r['id'],)).fetchall()
 
                 costo_totale_ricetta = sum((row['qta_grezza'] or 0) * (row['costo_netto'] or 0) for row in ings)
-                n_porzioni = r['porzioni'] if (r['porzioni'] and r['porzioni'] > 0) else 1
-                costo_porzione = costo_totale_ricetta / n_porzioni
-                
-                iva = r['aliquota_iva'] if r['aliquota_iva'] is not None else 10.0
-                prezzo_netto = (r['prezzo_lordo'] or 0) / (1 + (iva / 100))
+                porzioni = r['porzioni'] if (r['porzioni'] and r['porzioni'] > 0) else 1
+                costo_porzione = costo_totale_ricetta / porzioni
+                prezzo_lordo = r['prezzo_lordo'] or 0
+                aliquota_iva = r['aliquota_iva'] if r['aliquota_iva'] is not None else 10
+                prezzo_netto = prezzo_lordo / (1 + (aliquota_iva / 100))
                 food_cost_perc = (costo_porzione / prezzo_netto * 100) if prezzo_netto > 0 else 0
                 margine = prezzo_netto - costo_porzione
 
@@ -221,15 +201,14 @@ def handle_ricette():
             conn.close()
             return jsonify(ricette)
     except Exception as e:
-        conn.close()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/ricette/<int:ricetta_id>/ingredienti', methods=['GET', 'POST'])
 def handle_ricetta_ingredienti(ricetta_id):
-    conn = get_db()
     try:
+        conn = get_db()
         if request.method == 'POST':
-            data = request.get_json(silent=True) or {}
+            data = request.json or {}
             ingrediente_id = int(data['ingrediente_id'])
             qta_grezza = float(data['qta_grezza'])
             conn.execute("""
@@ -241,7 +220,7 @@ def handle_ricetta_ingredienti(ricetta_id):
             return jsonify({"status": "success"})
         else:
             ings = [dict(row) for row in conn.execute("""
-                SELECT ri.id as link_id, ri.qta_grezza, i.id as ing_id, i.nome, i.um, i.costo_netto, (ri.qta_grezza * COALESCE(i.costo_netto, 0)) as costo_linea
+                SELECT ri.id as link_id, ri.qta_grezza, i.id as ing_id, i.nome, i.um, i.costo_netto, (ri.qta_grezza * i.costo_netto) as costo_linea
                 FROM ricetta_ingredienti ri
                 JOIN ingredienti i ON ri.ingrediente_id = i.id
                 WHERE ri.ricetta_id = ?
@@ -249,7 +228,6 @@ def handle_ricetta_ingredienti(ricetta_id):
             conn.close()
             return jsonify(ings)
     except Exception as e:
-        conn.close()
         return jsonify({"error": str(e)}), 500
 
 @app.route('/api/ricette/ingredienti/<int:link_id>', methods=['DELETE'])
@@ -289,7 +267,7 @@ def delete_ingrediente(ing_id):
 @app.route('/api/carico', methods=['POST'])
 def registra_carico():
     try:
-        data = request.get_json(silent=True) or {}
+        data = request.json or {}
         ingrediente_id = int(data['ingrediente_id'])
         quantita = float(data['quantita'])
         prezzo_lordo = float(data['prezzo_lordo'])
@@ -323,7 +301,7 @@ def registra_carico():
 @app.route('/api/scarico', methods=['POST'])
 def registra_scarico():
     try:
-        data = request.get_json(silent=True) or {}
+        data = request.json or {}
         ricetta_id = int(data['ricetta_id'])
         porzioni_vendute = int(data['porzioni_vendute'])
 
